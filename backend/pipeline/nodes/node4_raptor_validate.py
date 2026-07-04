@@ -85,7 +85,7 @@ async def node4_raptor_validate(state: AuditResult) -> AuditResult:
     if target_path:
         logger.info("Ejecutando Raptor agentic sobre %s", target_path)
         try:
-            result = run_raptor_agentic(target_path, timeout=600)
+            result = run_raptor_agentic(target_path, timeout=120)
             if result.get("error"):
                 node_result.error = result["error"]
         except Exception:

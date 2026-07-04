@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -7,8 +8,8 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from executor import healthcheck as raptor_healthcheck
@@ -23,16 +24,17 @@ logger = logging.getLogger(__name__)
 
 audit_store: dict[str, AuditResult] = {}
 PUBLIC_DIR = Path(__file__).resolve().parent / "public"
+background_tasks: set[asyncio.Task] = set()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Surt IA Pipeline iniciado")
-    logger.info("  Gemini model: %s", settings.gemini_model)
-    logger.info("  OpenRouter model: %s", settings.openrouter_model)
+    logger.info("  OpenRouter: %s", settings.openrouter_model)
     logger.info("  Raptor dir: %s", settings.raptor_dir)
-    logger.info("  Frontend: HTML single-page en backend/")
     yield
+    for t in background_tasks:
+        t.cancel()
     logger.info("Surt IA Pipeline detenido")
 
 
@@ -57,29 +59,37 @@ async def health() -> dict[str, Any]:
     raptor = raptor_healthcheck()
     return {
         "status": "ok",
-        "gemini_configured": bool(settings.gemini_api_key),
         "openrouter_configured": bool(settings.openrouter_api_key),
         "raptor": raptor,
     }
 
 
-@app.post("/audit", response_model=AuditResult)
+@app.post("/audit")
 async def create_audit(prompt: PromptInput) -> AuditResult:
-    audit = AuditResult(prompt=prompt)
+    audit = AuditResult(prompt=prompt, status=AuditStatus.running)
     audit_store[audit.audit_id] = audit
 
+    task = asyncio.create_task(_run_pipeline(audit.audit_id))
+    background_tasks.add(task)
+    task.add_done_callback(background_tasks.discard)
+
+    return audit
+
+
+async def _run_pipeline(audit_id: str) -> None:
+    audit = audit_store.get(audit_id)
+    if not audit:
+        return
     try:
-        final_state = await graph.ainvoke(audit)
-        audit_store[audit.audit_id] = final_state
-        return final_state
+        result = await graph.ainvoke(audit)
+        audit_store[audit_id] = result
     except Exception as e:
-        logger.exception("Error ejecutando pipeline de auditoría")
+        logger.exception("Pipeline %s failed", audit_id)
         audit.status = AuditStatus.failed
         audit.error = str(e)
-        return audit
 
 
-@app.get("/audit/{audit_id}", response_model=AuditResult)
+@app.get("/audit/{audit_id}")
 async def get_audit(audit_id: str) -> AuditResult:
     audit = audit_store.get(audit_id)
     if not audit:
@@ -87,7 +97,7 @@ async def get_audit(audit_id: str) -> AuditResult:
     return audit
 
 
-@app.get("/audits", response_model=list[AuditResult])
+@app.get("/audits")
 async def list_audits(limit: int = 10) -> list[AuditResult]:
     audits = sorted(
         audit_store.values(),

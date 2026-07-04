@@ -38,7 +38,7 @@ async def node3_raptor_scan(state: AuditResult) -> AuditResult:
     logger.info("Ejecutando Raptor scan con contexto: %s...", context[:100])
 
     try:
-        result = run_raptor_scan(target_path, timeout=300)
+        result = run_raptor_scan(target_path, timeout=60)
 
         if result["success"]:
             node_result.status = AuditStatus.completed

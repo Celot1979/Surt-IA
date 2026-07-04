@@ -8,10 +8,10 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="/manifest.json">
 <title>Surt IA</title>
-<script>if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js')}</script>
+<script>if('serviceWorker'in navigator){navigator.serviceWorker.register('/sw.js')}</script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh;-webkit-text-size-adjust:100%}
 .container{max-width:900px;margin:0 auto;padding:16px}
 header{text-align:center;padding:24px 0 16px}
 header h1{font-size:1.5rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
@@ -31,13 +31,18 @@ label{display:block;font-size:.8rem;color:#94a3b8;margin-bottom:4px;font-weight:
 .bg-running{background:#1e40af;color:#93c5fd}
 .bg-completed{background:#065f46;color:#6ee7b7}
 .bg-failed,.bg-rejected{background:#7f1d1d;color:#fca5a5}
-.node{margin-bottom:6px;padding:10px;border-left:3px solid #334155;background:#0f172a;border-radius:0 8px 8px 0}
+.node{margin-bottom:6px;padding:10px;border-left:3px solid #334155;background:#0f172a;border-radius:0 8px 8px 0;transition:border-color .3s}
 .node.ok{border-color:#10b981}
 .node.err{border-color:#ef4444}
-.node.run{border-color:#3b82f6}
+.node.run{border-color:#3b82f6;animation:pulse 2s infinite}
+@keyframes pulse{50%{border-color:#60a5fa}}
 .node-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-size:.85rem;font-weight:600}
-.node-out{font-family:monospace;font-size:.75rem;color:#94a3b8;white-space:pre-wrap;max-height:150px;overflow-y:auto;margin-top:6px;padding:6px;background:#020617;border-radius:4px}
-.loading{text-align:center;padding:20px;color:#60a5fa}
+.node-out{font-family:monospace;font-size:.75rem;color:#94a3b8;white-space:pre-wrap;max-height:200px;overflow-y:auto;margin-top:6px;padding:6px;background:#020617;border-radius:4px}
+.node-out strong,.node-out b{color:#e2e8f0}
+.node-out .hl{color:#fbbf24}
+.loading{text-align:center;padding:20px;color:#60a5fa;display:flex;align-items:center;justify-content:center;gap:8px}
+.spinner{width:18px;height:18px;border:2px solid #334155;border-top-color:#3b82f6;border-radius:50%;animation:spin .8s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
 summary{font-weight:600;cursor:pointer;padding:4px 0;font-size:.9rem;color:#60a5fa}
 </style>
 </head>
@@ -58,55 +63,63 @@ summary{font-weight:600;cursor:pointer;padding:4px 0;font-size:.9rem;color:#60a5
 </div>
 
 <script>
-const labels={validate_input:'Validación de seguridad',node1_gemini:'Gemini (Análisis inicial)',node2_deepseek:'DeepSeek (Revisión cruzada)',node3_raptor_scan:'Raptor (Escaneo)',node4_raptor_validate:'Raptor (Validación)',finalize:'Finalización'}
-function cls(s){return 'badge bg-'+s}
+const labels={validate_input:'Validación de seguridad',node1_gemini:'Gemini (Análisis inicial)',node2_deepseek:'DeepSeek (Revisión)',node3_raptor_scan:'Raptor (Escaneo)',node4_raptor_validate:'Validador final (Consenso)',finalize:'Finalización'}
+const order=['validate_input','node1_gemini','node2_deepseek','node3_raptor_scan','node4_raptor_validate','finalize']
+function cls(s){return'badge bg-'+s}
+
 async function startAudit(){
 const c=document.getElementById('prompt').value.trim()
 if(!c)return
-const btn=document.getElementById('btnStart')
-btn.disabled=true;btn.textContent='Analizando...'
-const statusDiv=document.getElementById('status')
-const resultDiv=document.getElementById('result')
-statusDiv.innerHTML='<div class="card loading">Iniciando pipeline de auditoría...</div>'
-resultDiv.style.display='none'
+const btn=document.getElementById('btnStart');btn.disabled=true;btn.textContent='Iniciando...'
+const sd=document.getElementById('status');const rd=document.getElementById('result')
+sd.innerHTML='<div class="card loading"><div class="spinner"></div>Iniciando pipeline...</div>'
+rd.style.display='none'
 try{
 const r=await fetch('/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:c,target_path:document.getElementById('target').value.trim()||undefined})})
-if(!r.ok){statusDiv.innerHTML='<div class="card" style="border-color:#ef4444"><pre style="color:#fca5a5">Error '+r.status+'</pre></div>';return}
+if(!r.ok){sd.innerHTML='<div class="card" style="border-color:#ef4444"><pre style="color:#fca5a5">Error '+r.status+'</pre></div>';btn.disabled=false;btn.textContent='Iniciar auditoría';return}
 const d=await r.json()
-render(d)
-if(d.status==='running'||d.status==='pending'){setTimeout(()=>poll(d.audit_id),1500)}
-}catch(e){statusDiv.innerHTML='<div class="card" style="border-color:#ef4444"><pre style="color:#fca5a5">'+e.message+'</pre></div>'}
+sd.innerHTML=''
+rd.style.display='block'
+poll(d.audit_id)
+}catch(e){sd.innerHTML='<div class="card" style="border-color:#ef4444"><pre style="color:#fca5a5">'+escape(e.message)+'</pre></div>'}
 finally{btn.disabled=false;btn.textContent='Iniciar auditoría'}
 }
+
+let pollTimer=null
 async function poll(id){
+const rd=document.getElementById('result')
 try{
 const r=await fetch('/audit/'+id)
 if(!r.ok)return
 const d=await r.json()
-render(d)
-if(d.status==='running'||d.status==='pending'){setTimeout(()=>poll(id),2000)}
-}catch{setTimeout(()=>poll(id),3000)}
+renderProgress(d)
+if(d.status==='running'||d.status==='pending'){pollTimer=setTimeout(()=>poll(id),2000)}
+else{clearTimeout(pollTimer)}
+}catch{pollTimer=setTimeout(()=>poll(id),3000)}
 }
-function render(d){
-const statusDiv=document.getElementById('status')
-const resultDiv=document.getElementById('result')
-statusDiv.innerHTML=''
-resultDiv.style.display='block'
-let html='<div class="card">'
-html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
-html+='<span style="font-weight:600;font-size:.95rem">Auditoría #'+d.audit_id.slice(0,8)+'</span>'
+
+function escape(s){const d=document.createElement('div');d.appendChild(document.createTextNode(s));return d.innerHTML}
+
+function renderProgress(d){
+const rd=document.getElementById('result')
+const nodeMap={};for(const n of d.nodes)nodeMap[n.node_name]=n
+let html='<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+html+='<span style="font-weight:600;font-size:.95rem">Auditoría #'+escape(d.audit_id.slice(0,8))+'</span>'
 html+='<span class="'+cls(d.status)+'">'+d.status+'</span></div>'
-if(d.error)html+='<pre style="color:#fca5a5;margin-bottom:12px;padding:8px;background:#020617;border-radius:4px">'+d.error+'</pre>'
-for(const n of d.nodes){
+if(d.error)html+='<pre style="color:#fca5a5;margin-bottom:12px;padding:8px;background:#020617;border-radius:4px">'+escape(d.error)+'</pre>'
+for(const name of order){
+const n=nodeMap[name]
+if(!n){html+='<div class="node"><div class="node-hdr"><span>'+labels[name]+'</span><span class="badge bg-pending">pending</span></div></div>';continue}
 const nc=n.status==='completed'?'ok':n.status==='failed'||n.status==='rejected'?'err':'run'
-html+='<div class="node '+nc+'"><div class="node-hdr"><span>'+ (labels[n.node_name]||n.node_name)+'</span><span class="'+cls(n.status)+'">'+n.status+'</span></div>'
+html+='<div class="node '+nc+'"><div class="node-hdr"><span>'+labels[n.node_name]+'</span><span class="'+cls(n.status)+'">'+n.status+'</span></div>'
 if(n.duration_ms>0){html+='<span style="font-size:.7rem;color:#64748b">'+(n.duration_ms/1000).toFixed(1)+'s'+(n.token_usage&&n.token_usage.total_tokens>0?' · '+n.token_usage.total_tokens+' tokens':'')+'</span>'}
-if(n.output){html+='<div class="node-out">'+n.output+'</div>'}
+if(n.output){html+='<div class="node-out">'+escape(n.output.slice(0,2000))+'</div>'}
+if(n.error){html+='<div class="node-out" style="color:#fca5a5">'+escape(n.error)+'</div>'}
 html+='</div>'
 }
-if(d.summary){html+='<details style="margin-top:12px"><summary>Resumen</summary><div class="node-out">'+d.summary+'</div></details>'}
+if(d.summary){html+='<details style="margin-top:12px"><summary>Resumen</summary><div class="node-out">'+escape(d.summary)+'</div></details>'}
 html+='</div>'
-resultDiv.innerHTML=html
+rd.innerHTML=html
 }
 </script>
 </body>
