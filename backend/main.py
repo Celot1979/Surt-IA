@@ -22,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 audit_store: dict[str, AuditResult] = {}
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend" / "out"
+PUBLIC_DIR = Path(__file__).resolve().parent / "public"
 
 
 @asynccontextmanager
@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     logger.info("  Gemini model: %s", settings.gemini_model)
     logger.info("  OpenRouter model: %s", settings.openrouter_model)
     logger.info("  Raptor dir: %s", settings.raptor_dir)
-    logger.info("  Frontend: %s", FRONTEND_DIR if FRONTEND_DIR.exists() else "no built yet")
+    logger.info("  Frontend: HTML single-page en backend/")
     yield
     logger.info("Surt IA Pipeline detenido")
 
@@ -97,8 +97,20 @@ async def list_audits(limit: int = 10) -> list[AuditResult]:
     return audits[:limit]
 
 
-if FRONTEND_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
+@app.get("/")
+@app.get("/index.html")
+async def index():
+    return FileResponse(Path(__file__).resolve().parent / "index.html")
+
+
+@app.get("/manifest.json")
+async def manifest():
+    return FileResponse(PUBLIC_DIR / "manifest.json")
+
+
+@app.get("/sw.js")
+async def service_worker():
+    return FileResponse(PUBLIC_DIR / "sw.js", media_type="application/javascript")
 
 
 if __name__ == "__main__":
