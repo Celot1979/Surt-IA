@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any
 
 import httpx
 
@@ -12,34 +11,55 @@ from pipeline.models import AuditResult, AuditStatus, NodeResult
 logger = logging.getLogger(__name__)
 
 FINAL_SYSTEM = (
-    "Consolida los análisis de los agentes anteriores en un informe "
-    "final breve con: veredicto, hallazgos principales, y recomendaciones."
+    "Eres el validador final. Consolida los análisis de los agentes "
+    "en un INFORME FINAL CORTO y CLARO para el usuario.\n\n"
+    "Formato:\n"
+    "=== VEREDICTO FINAL ===\n"
+    "[SEGURO | SOSPECHOSO | PELIGROSO]\n\n"
+    "SEVERIDAD: [critical|high|medium|low|info]\n"
+    "RIESGO: [0-1]\n\n"
+    "HALLAZGOS:\n"
+    "- Hallazgo 1\n"
+    "- Hallazgo 2\n\n"
+    "RECOMENDACIÓN:\n"
+    "Texto breve con qué hacer.\n\n"
+    "NO incluyas el prompt original ni los análisis intermedios. "
+    "Solo el informe final."
 )
 
 
-async def _call(prompt: str) -> dict[str, Any]:
-    key = settings.openrouter_api_key
-    if not key:
-        return {"success": False, "error": "OPENROUTER_API_KEY no configurada", "content": None}
+async def node4_raptor_validate(state: AuditResult) -> AuditResult:
+    start = time.monotonic()
+    node_result = NodeResult(node_name="raptor_validate", status=AuditStatus.running)
 
-    payload = {
-        "model": "deepseek/deepseek-chat",
-        "messages": [
-            {"role": "system", "content": FINAL_SYSTEM},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.1,
-        "max_tokens": 1024,
-    }
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://surt-ia.local",
-        "X-Title": "SurtIA",
-    }
+    partes = []
+    for n in state.nodes:
+        if n.output:
+            partes.append(f"[{n.node_name}]:\n{n.output}")
+    context = "\n\n".join(partes) if partes else "No hay análisis disponibles."
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        key = settings.openrouter_api_key
+        if not key:
+            raise ValueError("OPENROUTER_API_KEY no configurada")
+
+        payload = {
+            "model": "deepseek/deepseek-chat",
+            "messages": [
+                {"role": "system", "content": FINAL_SYSTEM},
+                {"role": "user", "content": context},
+            ],
+            "temperature": 0.2,
+            "max_tokens": 800,
+        }
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://surt-ia.local",
+            "X-Title": "SurtIA",
+        }
+
+        async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(
                 f"{settings.openrouter_base_url}/chat/completions",
                 json=payload, headers=headers,
@@ -47,47 +67,19 @@ async def _call(prompt: str) -> dict[str, Any]:
             resp.raise_for_status()
             data = resp.json()
             choice = data.get("choices", [{}])[0]
+            content = choice.get("message", {}).get("content", "")
             usage = data.get("usage", {})
-            return {
-                "success": True,
-                "content": choice.get("message", {}).get("content", ""),
-                "token_usage": {
-                    "prompt_tokens": usage.get("prompt_tokens", 0),
-                    "completion_tokens": usage.get("completion_tokens", 0),
-                    "total_tokens": usage.get("total_tokens", 0),
-                },
+
+            node_result.status = AuditStatus.completed
+            node_result.output = content
+            node_result.token_usage = {
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
             }
-    except httpx.TimeoutException:
-        return {"success": False, "error": "Timeout", "content": None}
-    except Exception as e:
-        return {"success": False, "error": str(e), "content": None}
-
-
-async def node4_raptor_validate(state: AuditResult) -> AuditResult:
-    start = time.monotonic()
-    node_result = NodeResult(node_name="raptor_validate", status=AuditStatus.running)
-
-    partes = ["=== ANÁLISIS DE LOS AGENTES ==="]
-    for n in state.nodes:
-        if n.output:
-            partes.append(f"\n--- {n.node_name} ---\n{n.output[:500]}")
-    partes.append("\n=== GENERA INFORME FINAL ===")
-    context = "\n".join(partes)
-
-    try:
-        result = await _call(context)
-        if result["success"]:
-            node_result.status = AuditStatus.completed
-            node_result.output = result["content"]
-            node_result.token_usage = result.get("token_usage", {})
-            state.complete(summary=result["content"][:1000])
-        else:
-            node_result.status = AuditStatus.completed
-            node_result.output = context
-            node_result.error = result.get("error")
+            state.complete(summary=content[:1500])
     except Exception as e:
         node_result.status = AuditStatus.completed
-        node_result.output = context
+        node_result.output = f"Error generando informe final: {e}"
         node_result.error = str(e)
 
     node_result.duration_ms = (time.monotonic() - start) * 1000

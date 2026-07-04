@@ -9,7 +9,6 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
 
 from config import settings
 from executor import healthcheck as raptor_healthcheck
@@ -31,7 +30,6 @@ background_tasks: set[asyncio.Task] = set()
 async def lifespan(app: FastAPI):
     logger.info("Surt IA Pipeline iniciado")
     logger.info("  OpenRouter: %s", settings.openrouter_model)
-    logger.info("  Raptor dir: %s", settings.raptor_dir)
     yield
     for t in background_tasks:
         t.cancel()
