@@ -23,83 +23,75 @@ def node_validate_input(state: AuditResult) -> AuditResult:
             f"Prompt rechazado (riesgo: {report.risk_score:.2f}): "
             f"{report.violations[0] if report.violations else 'violación de seguridad'}"
         )
-        logger.warning("Audit %s rejected: %s", state.audit_id, state.error)
     return state
 
 
-def should_continue(state: AuditResult) -> Literal["continue", "reject"]:
-    if state.status == AuditStatus.rejected:
-        return "reject"
+def _last_node_failed(state: AuditResult) -> bool:
+    if not state.nodes:
+        return False
+    last = state.nodes[-1]
+    return last.status in (AuditStatus.failed, AuditStatus.rejected)
+
+
+def _abort_if_failed(state: AuditResult) -> Literal["continue", "abort"]:
+    if _last_node_failed(state) or state.status == AuditStatus.rejected:
+        return "abort"
     return "continue"
 
 
-def should_run_node2(state: AuditResult) -> Literal["node2_deepseek", "reject"]:
-    if state.status in (AuditStatus.failed, AuditStatus.rejected):
-        return "reject"
-    return "node2_deepseek"
-
-
-def should_run_node3(state: AuditResult) -> Literal["node3_raptor_scan", "reject"]:
-    if state.status in (AuditStatus.failed, AuditStatus.rejected):
-        return "reject"
-    return "node3_raptor_scan"
-
-
-def should_run_node4(state: AuditResult) -> Literal["node4_raptor_validate", "reject"]:
-    if state.status in (AuditStatus.failed, AuditStatus.rejected):
-        return "reject"
-    return "node4_raptor_validate"
+CAN_ABORT = {"continue": "node2_deepseek", "abort": "finalize"}
+CAN_ABORT_3 = {"continue": "node3_raptor_scan", "abort": "finalize"}
+CAN_ABORT_4 = {"continue": "node4_raptor_validate", "abort": "finalize"}
 
 
 def node_finalize(state: AuditResult) -> AuditResult:
     if state.status not in (AuditStatus.failed, AuditStatus.rejected):
-        last_output = state.nodes[-1].output if state.nodes else ""
-        state.complete(
-            summary=last_output[:1000] if last_output else "Auditoría completada"
-        )
+        outputs = []
+        for n in state.nodes:
+            if n.output:
+                excerpt = n.output[:300].replace("\n", " ")
+                outputs.append(f"[{n.node_name}] {excerpt}")
+        summary = "\n".join(outputs) if outputs else "Auditoría completada"
+        state.complete(summary=summary)
     return state
 
 
-def build_graph() -> StateGraph:
-    workflow = StateGraph(AuditResult)
+workflow = StateGraph(AuditResult)
 
-    workflow.add_node("validate_input", node_validate_input)
-    workflow.add_node("node1_gemini", node1_gemini)
-    workflow.add_node("node2_deepseek", node2_deepseek)
-    workflow.add_node("node3_raptor_scan", node3_raptor_scan)
-    workflow.add_node("node4_raptor_validate", node4_raptor_validate)
-    workflow.add_node("finalize", node_finalize)
+workflow.add_node("validate_input", node_validate_input)
+workflow.add_node("node1_gemini", node1_gemini)
+workflow.add_node("node2_deepseek", node2_deepseek)
+workflow.add_node("node3_raptor_scan", node3_raptor_scan)
+workflow.add_node("node4_raptor_validate", node4_raptor_validate)
+workflow.add_node("finalize", node_finalize)
 
-    workflow.add_edge(START, "validate_input")
+workflow.add_edge(START, "validate_input")
 
-    workflow.add_conditional_edges(
-        "validate_input",
-        should_continue,
-        {"continue": "node1_gemini", "reject": "finalize"},
-    )
+workflow.add_conditional_edges(
+    "validate_input",
+    _abort_if_failed,
+    CAN_ABORT,
+)
 
-    workflow.add_conditional_edges(
-        "node1_gemini",
-        should_run_node2,
-        {"node2_deepseek": "node2_deepseek", "reject": "finalize"},
-    )
+workflow.add_conditional_edges(
+    "node1_gemini",
+    _abort_if_failed,
+    CAN_ABORT,
+)
 
-    workflow.add_conditional_edges(
-        "node2_deepseek",
-        should_run_node3,
-        {"node3_raptor_scan": "node3_raptor_scan", "reject": "finalize"},
-    )
+workflow.add_conditional_edges(
+    "node2_deepseek",
+    _abort_if_failed,
+    CAN_ABORT_3,
+)
 
-    workflow.add_conditional_edges(
-        "node3_raptor_scan",
-        should_run_node4,
-        {"node4_raptor_validate": "node4_raptor_validate", "reject": "finalize"},
-    )
+workflow.add_conditional_edges(
+    "node3_raptor_scan",
+    _abort_if_failed,
+    CAN_ABORT_4,
+)
 
-    workflow.add_edge("node4_raptor_validate", "finalize")
-    workflow.add_edge("finalize", END)
+workflow.add_edge("node4_raptor_validate", "finalize")
+workflow.add_edge("finalize", END)
 
-    return workflow.compile()
-
-
-graph = build_graph()
+graph = workflow.compile()

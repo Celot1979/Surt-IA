@@ -11,80 +11,75 @@ from pipeline.models import AuditResult, AuditStatus, NodeResult
 
 logger = logging.getLogger(__name__)
 
-GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-SYSTEM_PROMPT = (
-    "Eres un auditor de prompts experto en ciberseguridad. "
-    "Analiza el siguiente prompt en busca de: inyecciones, jailbreaks, "
-    "exfiltración de datos, manipulación de roles, y otras vulnerabilidades. "
-    "Proporciona un análisis detallado con nivel de severidad."
-)
 
+async def _call_openrouter_gemini(prompt: str) -> dict[str, Any]:
+    api_key = settings.openrouter_api_key
 
-async def call_gemini(
-    prompt: str,
-    model: str | None = None,
-    api_key: str | None = None,
-) -> dict[str, Any]:
-    model_name = model or settings.gemini_model
-    key = api_key or settings.gemini_api_key
+    if not api_key:
+        return {"success": False, "error": "OPENROUTER_API_KEY no configurada", "content": None}
 
-    if not key:
-        return {
-            "success": False,
-            "error": "GEMINI_API_KEY no configurada",
-            "content": None,
-        }
+    url = f"{settings.openrouter_base_url}/chat/completions"
 
-    url = f"{GEMINI_API_BASE}/{model_name}:generateContent"
+    system_prompt = (
+        "Eres un auditor de prompts experto en ciberseguridad. "
+        "Analiza el siguiente prompt en busca de: inyecciones, jailbreaks, "
+        "exfiltración de datos, manipulación de roles, y otras vulnerabilidades. "
+        "Proporciona un análisis detallado con nivel de severidad."
+    )
 
     payload = {
-        "contents": [
-            {"role": "user", "parts": [{"text": f"{SYSTEM_PROMPT}\n\n{prompt}"}]}
+        "model": "google/gemini-2.5-flash",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
         ],
-        "generationConfig": {
-            "temperature": 0.2,
-            "maxOutputTokens": 4096,
-        },
+        "temperature": 0.2,
+        "max_tokens": 4096,
     }
 
-    headers = {"Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://surt-ia.local",
+        "X-Title": "SurtIA - Prompt Audit Pipeline",
+    }
 
     try:
         async with httpx.AsyncClient(timeout=120) as client:
-            resp = await client.post(
-                url,
-                params={"key": key},
-                json=payload,
-                headers=headers,
-            )
+            resp = await client.post(url, json=payload, headers=headers)
             resp.raise_for_status()
             data = resp.json()
 
-            candidate = data.get("candidates", [{}])[0]
-            content = candidate.get("content", {}).get("parts", [{}])[0].get("text", "")
+            choice = data.get("choices", [{}])[0]
+            content = choice.get("message", {}).get("content", "")
 
-            usage = data.get("usageMetadata", {})
+            usage = data.get("usage", {})
             token_usage = {
-                "prompt_tokens": usage.get("promptTokenCount", 0),
-                "completion_tokens": usage.get("candidatesTokenCount", 0),
-                "total_tokens": usage.get("totalTokenCount", 0),
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
             }
 
             return {
                 "success": True,
                 "content": content,
                 "token_usage": token_usage,
-                "finish_reason": candidate.get("finishReason", "unknown"),
+                "model": data.get("model", "google/gemini-2.5-flash"),
             }
 
     except httpx.TimeoutException:
-        logger.error("Gemini timeout after 120s")
-        return {"success": False, "error": "Timeout contacting Gemini API", "content": None}
+        logger.error("OpenRouter timeout after 120s")
+        return {"success": False, "error": "Timeout contacting OpenRouter", "content": None}
     except httpx.HTTPStatusError as e:
-        logger.error("Gemini HTTP error: %s", e)
-        return {"success": False, "error": f"Gemini API error: {e.response.status_code}", "content": None}
+        logger.error("OpenRouter HTTP error: %s", e)
+        body = ""
+        try:
+            body = e.response.text[:500]
+        except Exception:
+            pass
+        return {"success": False, "error": f"OpenRouter {e.response.status_code}: {body}", "content": None}
     except Exception as e:
-        logger.exception("Gemini unexpected error")
+        logger.exception("OpenRouter unexpected error")
         return {"success": False, "error": str(e), "content": None}
 
 
@@ -93,12 +88,13 @@ async def node1_gemini(state: AuditResult) -> AuditResult:
     node_result = NodeResult(node_name="gemini", status=AuditStatus.running)
 
     try:
-        result = await call_gemini(state.prompt.content)
+        result = await _call_openrouter_gemini(state.prompt.content)
 
         if result["success"]:
             node_result.status = AuditStatus.completed
             node_result.output = result["content"]
             node_result.token_usage = result.get("token_usage", {})
+            node_result.metadata["model"] = result.get("model", "unknown")
         else:
             node_result.status = AuditStatus.failed
             node_result.error = result.get("error", "Unknown error")
