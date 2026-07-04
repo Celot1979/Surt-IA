@@ -6,47 +6,45 @@ from typing import Literal
 from langgraph.graph import END, START, StateGraph
 
 from pipeline.models import AuditResult, AuditStatus
-from pipeline.nodes.node1_gemini import node1_gemini
-from pipeline.nodes.node2_deepseek import node2_deepseek
-from pipeline.nodes.node3_raptor_scan import node3_raptor_scan
-from pipeline.nodes.node4_raptor_validate import node4_raptor_validate
-from pipeline.security import validate_prompt
+from pipeline.nodes.node1_generate import node1_generate
+from pipeline.nodes.node3_claude_refine import node3_claude_refine
+from pipeline.nodes.node4_consolidate import node4_consolidate
 
 logger = logging.getLogger(__name__)
 
 
 def node_validate_input(state: AuditResult) -> AuditResult:
-    report = validate_prompt(state.prompt)
-    if not report.is_valid:
+    content = state.prompt.content.strip()
+    if not content:
         state.status = AuditStatus.rejected
-        state.error = f"Prompt rechazado (riesgo: {report.risk_score:.2f})"
+        state.error = "El prompt está vacío"
+    elif len(content) < 3:
+        state.status = AuditStatus.rejected
+        state.error = "Prompt demasiado corto (mínimo 3 caracteres)"
     return state
 
 
 def gate(state: AuditResult) -> Literal["ok", "abort"]:
-    if not state.nodes:
-        return "ok"
-    last = state.nodes[-1]
-    if last.status in (AuditStatus.failed, AuditStatus.rejected):
+    if state.status in (AuditStatus.rejected, AuditStatus.failed):
         return "abort"
-    if state.status == AuditStatus.rejected:
-        return "abort"
+    if state.nodes:
+        last = state.nodes[-1]
+        if last.status in (AuditStatus.failed, AuditStatus.rejected):
+            return "abort"
     return "ok"
 
 
 workflow = StateGraph(AuditResult)
 
 workflow.add_node("validate_input", node_validate_input)
-workflow.add_node("node1_gemini", node1_gemini)
-workflow.add_node("node2_deepseek", node2_deepseek)
-workflow.add_node("node3_raptor_scan", node3_raptor_scan)
-workflow.add_node("node4_raptor_validate", node4_raptor_validate)
+workflow.add_node("node1_generate", node1_generate)
+workflow.add_node("node3_claude_refine", node3_claude_refine)
+workflow.add_node("node4_consolidate", node4_consolidate)
 
 workflow.add_edge(START, "validate_input")
-workflow.add_conditional_edges("validate_input", gate, {"ok": "node1_gemini", "abort": END})
-workflow.add_conditional_edges("node1_gemini", gate, {"ok": "node2_deepseek", "abort": END})
-workflow.add_conditional_edges("node2_deepseek", gate, {"ok": "node3_raptor_scan", "abort": END})
-workflow.add_conditional_edges("node3_raptor_scan", gate, {"ok": "node4_raptor_validate", "abort": END})
-workflow.add_edge("node4_raptor_validate", END)
+workflow.add_conditional_edges("validate_input", gate, {"ok": "node1_generate", "abort": END})
+workflow.add_conditional_edges("node1_generate", gate, {"ok": "node3_claude_refine", "abort": END})
+workflow.add_conditional_edges("node3_claude_refine", gate, {"ok": "node4_consolidate", "abort": END})
+workflow.add_edge("node4_consolidate", END)
 
 graph = workflow.compile()

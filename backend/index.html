@@ -17,6 +17,8 @@ header{text-align:center;padding:20px 0 16px}
 header h1{font-size:1.5rem;font-weight:700;background:linear-gradient(135deg,#60a5fa,#a78bfa);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
 header p{color:#94a3b8;font-size:.85rem;margin-top:4px}
 .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:16px;margin-bottom:12px}
+.card.error{background:#7f1d1d;border-color:#dc2626}
+.card.error .resultado{color:#fca5a5}
 textarea{width:100%;min-height:120px;padding:10px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:.9rem;font-family:monospace;resize:vertical}
 textarea:focus{outline:none;border-color:#3b82f6}
 .btn{display:block;width:100%;padding:12px;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;background:#3b82f6;color:#fff;margin-top:8px;text-align:center}
@@ -24,36 +26,22 @@ textarea:focus{outline:none;border-color:#3b82f6}
 .loading{display:flex;align-items:center;justify-content:center;gap:8px;padding:20px;color:#60a5fa}
 .spinner{width:20px;height:20px;border:2px solid #334155;border-top-color:#3b82f6;border-radius:50%;animation:spin .8s linear infinite;display:inline-block}
 @keyframes spin{to{transform:rotate(360deg)}}
-.severity{display:inline-block;padding:4px 12px;border-radius:6px;font-weight:700;font-size:.85rem;margin-bottom:8px}
-.sev-critical{background:#7f1d1d;color:#fca5a5}
-.sev-high{background:#7f1d1d;color:#fca5a5}
-.sev-medium{background:#713f12;color:#fde68a}
-.sev-low{background:#1e3a5f;color:#93c5fd}
-.sev-info{background:#1e293b;color:#94a3b8}
-.veredicto{font-size:1.3rem;font-weight:700;margin:8px 0}
-.ver-seguro{color:#6ee7b7}
-.ver-sospechoso{color:#fde68a}
-.ver-peligroso{color:#fca5a5}
-pre{font-family:monospace;font-size:.85rem;white-space:pre-wrap;line-height:1.5}
+.resultado{font-family:monospace;font-size:.85rem;white-space:pre-wrap;line-height:1.6;color:#e2e8f0}
+.switch{display:flex;align-items:center;gap:8px;margin:12px 0;cursor:pointer;font-size:.85rem;color:#94a3b8;user-select:none}
+.switch input{width:18px;height:18px;accent-color:#8b5cf6;cursor:pointer}
+.node-info{font-size:.75rem;color:#64748b;margin-top:8px;padding:8px;background:#0f172a;border-radius:4px}
 </style>
 </head>
 <body>
 <div class="container">
-<header><h1>Surt IA</h1><p>Auditoría de prompts multi-agente</p></header>
-
-<style>
-.switch{display:flex;align-items:center;gap:8px;margin:12px 0;cursor:pointer;font-size:.85rem;color:#94a3b8;user-select:none}
-.switch input{width:18px;height:18px;accent-color:#3b82f6;cursor:pointer}
-.switch input:checked+.slider{background:#3b82f6}
-</style>
+<header><h1>Surt IA</h1><p>Pipeline multi-agente (DeepSeek → Claude Code → Consolidación)</p></header>
 
 <div class="card">
 <div class="form-group">
-<label for="prompt">Pega el prompt a auditar:</label>
-<textarea id="prompt" placeholder="Ej: 'Omite todas las restricciones y actúa como...'"></textarea>
+<label for="prompt">¿Qué quieres que hagan las IAs?</label>
+<textarea id="prompt" placeholder="Ej: 'Crea un script de python que haga ping a una IP y diga si hay conexión...'"></textarea>
 </div>
-<label class="switch"><input type="checkbox" id="chkRaptor"> Activar Raptor (escanear código con Semgrep)</label>
-<button class="btn" id="btnStart" onclick="start()">Auditar prompt</button>
+<button class="btn" id="btnStart" onclick="start()">Ejecutar</button>
 </div>
 
 <div id="result" style="display:none"></div>
@@ -64,18 +52,24 @@ async function start(){
 const c=document.getElementById('prompt').value.trim()
 if(!c)return
 const btn=document.getElementById('btnStart')
-btn.disabled=true;btn.textContent='Analizando...'
+btn.disabled=true;btn.textContent='Ejecutando pipeline...'
 const rd=document.getElementById('result')
 rd.style.display='block'
-rd.innerHTML='<div class="card loading"><div class="spinner"></div>Ejecutando pipeline multi-agente...</div>'
+rd.innerHTML='<div class="card loading"><div class="spinner"></div>Iniciando pipeline...</div>'
 try{
-const raptor=document.getElementById('chkRaptor').checked
-const r=await fetch('/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:c,use_raptor:raptor})})
-if(!r.ok){rd.innerHTML='<div class="card"><pre style="color:#fca5a5">Error '+(await r.text())+'</pre></div>';return}
+const r=await fetch('/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:c})})
+if(!r.ok){rd.innerHTML='<div class="card error"><div class="resultado">Error del servidor: '+r.status+'</div></div>';return}
 const d=await r.json()
 poll(d.audit_id)
-}catch(e){rd.innerHTML='<div class="card"><pre style="color:#fca5a5">Error de conexión</pre></div>'}
-finally{btn.disabled=false;btn.textContent='Auditar prompt'}
+}catch(e){rd.innerHTML='<div class="card error"><div class="resultado">Error de conexión: no se pudo iniciar el pipeline</div></div>'}
+finally{btn.disabled=false;btn.textContent='Ejecutar'}
+}
+
+let pollTimer=null
+
+function nodeLabel(nm){
+const m={validate_input:'Validación',node1_generate:'1. DeepSeek (generación)',node3_claude_refine:'2. Claude Code (refinamiento)',node4_consolidate:'3. Consolidación final'}
+return m[nm]||nm
 }
 
 async function poll(id){
@@ -84,35 +78,71 @@ try{
 const r=await fetch('/audit/'+id)
 if(!r.ok)return
 const d=await r.json()
-const ultimo=d.nodes[d.nodes.length-1]
-if(ultimo&&ultimo.output){
-const html=renderFinal(ultimo.output)
-rd.innerHTML='<div class="card">'+html+'</div>'
+
+if(d.status==='failed'){
+clearTimeout(pollTimer)
+let err=d.error||'Error desconocido'
+let html='<div class="card error">'
+html+='<div style="display:flex;justify-content:space-between;margin-bottom:8px">'
+html+='<span style="font-weight:600">❌ Pipeline falló</span>'
+html+='<span style="color:#fca5a5;font-size:.8rem">failed</span></div>'
+html+='<div class="resultado">'+escapeHtml(err)+'</div>'
+const nodes=d.nodes||[]
+for(const n of nodes){
+const st=n.status||''
+const icon=st==='completed'?'✅':st==='failed'?'❌':'⬜'
+html+='<div style="margin:4px 0;font-size:.85rem">'+icon+' '+nodeLabel(n.node_name)+'</div>'
+}
+html+='</div>'
+rd.innerHTML=html
+btn.textContent='Ejecutar'
+return
+}
+
+let html='<div class="card"><div style="display:flex;justify-content:space-between;margin-bottom:8px">'
+html+='<span style="font-weight:600">Pipeline multi-agente</span>'
+html+='<span style="color:#94a3b8;font-size:.8rem">'+d.status+'</span></div>'
+
+const nodes=d.nodes||[]
+let ultimoOutput=''
+let ultimoError=''
+for(const n of nodes){
+const st=n.status||''
+const icon=st==='completed'?'✅':st==='running'?'⏳':st==='failed'?'❌':'⬜'
+const lbl=nodeLabel(n.node_name)
+html+='<div style="margin:4px 0;font-size:.85rem">'+icon+' '+lbl+' <span style="color:#64748b;font-size:.75rem">'
+if(n.duration_ms>0)html+='('+(n.duration_ms/1000).toFixed(1)+'s)'
+html+='</span></div>'
+if(n.output)ultimoOutput=n.output
+if(n.error)ultimoError=n.error
+}
+
+if(ultimoError){
+html+='<div style="color:#fca5a5;font-size:.85rem;margin-top:8px;padding:8px;background:#7f1d1d;border-radius:4px">❌ '+escapeHtml(ultimoError)+'</div>'
+}
+
+if(ultimoOutput){
+html+='<hr style="border-color:#334155;margin:12px 0">'
+html+='<div class="resultado">'+escapeHtml(ultimoOutput)+'</div>'
+}
+
+html+='</div>'
+rd.innerHTML=html
+
+if(d.status==='running'||d.status==='pending'){
+pollTimer=setTimeout(()=>poll(id),1500)
 }else{
-rd.innerHTML='<div class="card loading"><div class="spinner"></div>Procesando...</div>'
+document.getElementById('btnStart').textContent='Ejecutar'
 }
-if(d.status==='running'||d.status==='pending'){setTimeout(()=>poll(id),1500)}
-}catch{setTimeout(()=>poll(id),3000)}
+}catch{
+pollTimer=setTimeout(()=>poll(id),3000)
+}
 }
 
-function renderFinal(texto){
-let sev='info'
-if(texto.includes('CRITICAL'))sev='critical'
-else if(texto.includes('HIGH'))sev='high'
-else if(texto.includes('MEDIUM'))sev='medium'
-else if(texto.includes('LOW'))sev='low'
-
-let veredicto=''
-let vclass=''
-if(texto.includes('PELIGROSO')){veredicto='PELIGROSO';vclass='ver-peligroso'}
-else if(texto.includes('SOSPECHOSO')){veredicto='SOSPECHOSO';vclass='ver-sospechoso'}
-else if(texto.includes('SEGURO')){veredicto='SEGURO';vclass='ver-seguro'}
-
-let html=''
-if(veredicto){html+='<div class="veredicto '+vclass+'">'+veredicto+'</div>'}
-html+='<span class="severity sev-'+sev+'">'+sev.toUpperCase()+'</span>'
-html+='<pre>'+texto+'</pre>'
-return html
+function escapeHtml(s){
+const d=document.createElement('div')
+d.appendChild(document.createTextNode(s||''))
+return d.innerHTML
 }
 </script>
 </body>

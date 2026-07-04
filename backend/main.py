@@ -11,7 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from config import settings
-from executor import healthcheck as raptor_healthcheck
 from pipeline.graph import graph
 from pipeline.models import AuditResult, AuditStatus, PromptInput
 
@@ -37,9 +36,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Surt IA - Prompt Audit Pipeline",
-    description="Pipeline multi-agente de auditoría de prompts con LangGraph",
-    version="1.0.0",
+    title="Surt IA - Pipeline Multi-Agente",
+    description="Pipeline multi-agente con DeepSeek + Claude Code",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -54,11 +53,9 @@ app.add_middleware(
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    raptor = raptor_healthcheck()
     return {
         "status": "ok",
         "openrouter_configured": bool(settings.openrouter_api_key),
-        "raptor": raptor,
     }
 
 

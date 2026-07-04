@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: surt-ia
+    runtime: python
+    repo: https://github.com/Celot1979/Surt-IA
+    branch: master
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: RAPTOR_DIR
+        value: /home/dani/Documentos/Raptor/raptor
+      - key: RAPTOR_BIN
+        value: /home/dani/Documentos/Raptor/raptor/bin/raptor
