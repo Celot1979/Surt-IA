@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Literal
+from typing import Literal
 
-from langgraph.graph import END, StateGraph
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, START, StateGraph
 
 from pipeline.models import AuditResult, AuditStatus
 from pipeline.nodes.node1_gemini import node1_gemini
@@ -19,9 +18,11 @@ logger = logging.getLogger(__name__)
 def node_validate_input(state: AuditResult) -> AuditResult:
     report = validate_prompt(state.prompt)
     if not report.is_valid:
-        node = state.nodes[-1] if state.nodes else None
         state.status = AuditStatus.rejected
-        state.error = f"Prompt rechazado (riesgo: {report.risk_score:.2f}): {report.violations[0] if report.violations else 'violación de seguridad'}"
+        state.error = (
+            f"Prompt rechazado (riesgo: {report.risk_score:.2f}): "
+            f"{report.violations[0] if report.violations else 'violación de seguridad'}"
+        )
         logger.warning("Audit %s rejected: %s", state.audit_id, state.error)
     return state
 
@@ -33,27 +34,29 @@ def should_continue(state: AuditResult) -> Literal["continue", "reject"]:
 
 
 def should_run_node2(state: AuditResult) -> Literal["node2_deepseek", "reject"]:
-    if state.status == AuditStatus.failed or state.status == AuditStatus.rejected:
+    if state.status in (AuditStatus.failed, AuditStatus.rejected):
         return "reject"
     return "node2_deepseek"
 
 
 def should_run_node3(state: AuditResult) -> Literal["node3_raptor_scan", "reject"]:
-    if state.status == AuditStatus.failed or state.status == AuditStatus.rejected:
+    if state.status in (AuditStatus.failed, AuditStatus.rejected):
         return "reject"
     return "node3_raptor_scan"
 
 
 def should_run_node4(state: AuditResult) -> Literal["node4_raptor_validate", "reject"]:
-    if state.status == AuditStatus.failed or state.status == AuditStatus.rejected:
+    if state.status in (AuditStatus.failed, AuditStatus.rejected):
         return "reject"
     return "node4_raptor_validate"
 
 
-def finalize(state: AuditResult) -> AuditResult:
+def node_finalize(state: AuditResult) -> AuditResult:
     if state.status not in (AuditStatus.failed, AuditStatus.rejected):
         last_output = state.nodes[-1].output if state.nodes else ""
-        state.complete(summary=last_output[:1000] if last_output else "Auditoría completada sin análisis disponible")
+        state.complete(
+            summary=last_output[:1000] if last_output else "Auditoría completada"
+        )
     return state
 
 
@@ -65,9 +68,9 @@ def build_graph() -> StateGraph:
     workflow.add_node("node2_deepseek", node2_deepseek)
     workflow.add_node("node3_raptor_scan", node3_raptor_scan)
     workflow.add_node("node4_raptor_validate", node4_raptor_validate)
-    workflow.add_node("finalize", finalize)
+    workflow.add_node("finalize", node_finalize)
 
-    workflow.set_entry_point("validate_input")
+    workflow.add_edge(START, "validate_input")
 
     workflow.add_conditional_edges(
         "validate_input",
@@ -96,7 +99,7 @@ def build_graph() -> StateGraph:
     workflow.add_edge("node4_raptor_validate", "finalize")
     workflow.add_edge("finalize", END)
 
-    return workflow
+    return workflow.compile()
 
 
 graph = build_graph()
