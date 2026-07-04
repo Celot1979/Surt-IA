@@ -26,33 +26,33 @@ def node_validate_input(state: AuditResult) -> AuditResult:
     return state
 
 
-def _last_node_failed(state: AuditResult) -> bool:
+def _last_failed(state: AuditResult) -> bool:
     if not state.nodes:
         return False
-    last = state.nodes[-1]
-    return last.status in (AuditStatus.failed, AuditStatus.rejected)
+    return state.nodes[-1].status in (AuditStatus.failed, AuditStatus.rejected)
 
 
-def _abort_if_failed(state: AuditResult) -> Literal["continue", "abort"]:
-    if _last_node_failed(state) or state.status == AuditStatus.rejected:
+def _gate(state: AuditResult) -> Literal["continue", "abort"]:
+    if _last_failed(state) or state.status == AuditStatus.rejected:
         return "abort"
     return "continue"
 
 
-CAN_ABORT = {"continue": "node2_deepseek", "abort": "finalize"}
-CAN_ABORT_3 = {"continue": "node3_raptor_scan", "abort": "finalize"}
-CAN_ABORT_4 = {"continue": "node4_raptor_validate", "abort": "finalize"}
+NEXT_GEMINI = {"continue": "node1_gemini", "abort": "finalize"}
+NEXT_DEEPSEEK = {"continue": "node2_deepseek", "abort": "finalize"}
+NEXT_RAPTOR_SCAN = {"continue": "node3_raptor_scan", "abort": "finalize"}
+NEXT_RAPTOR_VALIDATE = {"continue": "node4_raptor_validate", "abort": "finalize"}
 
 
 def node_finalize(state: AuditResult) -> AuditResult:
     if state.status not in (AuditStatus.failed, AuditStatus.rejected):
-        outputs = []
-        for n in state.nodes:
-            if n.output:
-                excerpt = n.output[:300].replace("\n", " ")
-                outputs.append(f"[{n.node_name}] {excerpt}")
-        summary = "\n".join(outputs) if outputs else "Auditoría completada"
-        state.complete(summary=summary)
+        outputs = [
+            f"[{n.node_name}] {n.output[:200].replace(chr(10), ' ')}"
+            for n in state.nodes
+            if n.output
+        ]
+        if not state.summary:
+            state.complete(summary="\n".join(outputs) if outputs else "Auditoría completada")
     return state
 
 
@@ -66,31 +66,10 @@ workflow.add_node("node4_raptor_validate", node4_raptor_validate)
 workflow.add_node("finalize", node_finalize)
 
 workflow.add_edge(START, "validate_input")
-
-workflow.add_conditional_edges(
-    "validate_input",
-    _abort_if_failed,
-    CAN_ABORT,
-)
-
-workflow.add_conditional_edges(
-    "node1_gemini",
-    _abort_if_failed,
-    CAN_ABORT,
-)
-
-workflow.add_conditional_edges(
-    "node2_deepseek",
-    _abort_if_failed,
-    CAN_ABORT_3,
-)
-
-workflow.add_conditional_edges(
-    "node3_raptor_scan",
-    _abort_if_failed,
-    CAN_ABORT_4,
-)
-
+workflow.add_conditional_edges("validate_input", _gate, NEXT_GEMINI)
+workflow.add_conditional_edges("node1_gemini", _gate, NEXT_DEEPSEEK)
+workflow.add_conditional_edges("node2_deepseek", _gate, NEXT_RAPTOR_SCAN)
+workflow.add_conditional_edges("node3_raptor_scan", _gate, NEXT_RAPTOR_VALIDATE)
 workflow.add_edge("node4_raptor_validate", "finalize")
 workflow.add_edge("finalize", END)
 
