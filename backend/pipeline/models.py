@@ -28,6 +28,7 @@ class PromptInput(BaseModel):
     prompt_id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
     content: str = Field(..., min_length=1, max_length=100_000)
     target_path: str | None = Field(None, description="Path al repositorio a auditar")
+    use_raptor: bool = Field(False, description="Activar escaneo Raptor")
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("content")

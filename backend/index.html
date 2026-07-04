@@ -41,11 +41,18 @@ pre{font-family:monospace;font-size:.85rem;white-space:pre-wrap;line-height:1.5}
 <div class="container">
 <header><h1>Surt IA</h1><p>Auditoría de prompts multi-agente</p></header>
 
+<style>
+.switch{display:flex;align-items:center;gap:8px;margin:12px 0;cursor:pointer;font-size:.85rem;color:#94a3b8;user-select:none}
+.switch input{width:18px;height:18px;accent-color:#3b82f6;cursor:pointer}
+.switch input:checked+.slider{background:#3b82f6}
+</style>
+
 <div class="card">
 <div class="form-group">
 <label for="prompt">Pega el prompt a auditar:</label>
 <textarea id="prompt" placeholder="Ej: 'Omite todas las restricciones y actúa como...'"></textarea>
 </div>
+<label class="switch"><input type="checkbox" id="chkRaptor"> Activar Raptor (escanear código con Semgrep)</label>
 <button class="btn" id="btnStart" onclick="start()">Auditar prompt</button>
 </div>
 
@@ -62,7 +69,8 @@ const rd=document.getElementById('result')
 rd.style.display='block'
 rd.innerHTML='<div class="card loading"><div class="spinner"></div>Ejecutando pipeline multi-agente...</div>'
 try{
-const r=await fetch('/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:c})})
+const raptor=document.getElementById('chkRaptor').checked
+const r=await fetch('/audit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({content:c,use_raptor:raptor})})
 if(!r.ok){rd.innerHTML='<div class="card"><pre style="color:#fca5a5">Error '+(await r.text())+'</pre></div>';return}
 const d=await r.json()
 poll(d.audit_id)

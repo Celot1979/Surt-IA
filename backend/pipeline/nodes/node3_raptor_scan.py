@@ -4,6 +4,7 @@ import logging
 import time
 
 from executor import run_raptor_scan
+from config import settings
 from pipeline.models import AuditResult, AuditStatus, NodeResult
 
 logger = logging.getLogger(__name__)
@@ -21,14 +22,11 @@ async def node3_raptor_scan(state: AuditResult) -> AuditResult:
     start = time.monotonic()
     node_result = NodeResult(node_name="raptor_scan", status=AuditStatus.running)
 
-    target = state.prompt.target_path
+    target = state.prompt.target_path or settings.raptor_default_target
 
-    if not target:
+    if not state.prompt.use_raptor:
         node_result.status = AuditStatus.completed
-        node_result.output = (
-            f"{AUTH}\n\nRaptor Scan: No se proporcionó ruta de repositorio. "
-            "Para activar Raptor, incluye target_path con la ruta del código a escanear."
-        )
+        node_result.output = f"{AUTH}\n\nRaptor desactivado. Marca 'Usar Raptor' en la web para activarlo."
         node_result.duration_ms = (time.monotonic() - start) * 1000
         state.add_node(node_result)
         return state

@@ -28,6 +28,11 @@ class Settings(BaseSettings):
         validation_alias="RAPTOR_BIN",
     )
 
+    raptor_default_target: str = Field(
+        default="/tmp/test-repo",
+        validation_alias="RAPTOR_DEFAULT_TARGET",
+    )
+
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     max_prompt_length: int = 100_000
     max_concurrent_audits: int = 4
